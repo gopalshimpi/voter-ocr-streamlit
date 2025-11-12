@@ -31,12 +31,11 @@ def normalize_voter_id(voter_id: str) -> str:
     return v
 
 def ocr_text(img_path: str) -> str:
-    res = reader.readtext(img_path)
+    res = reader.readtext(str(img_path))
     return " ".join([r[1] for r in res])
 
 # --- Extract name accurately ---
 def extract_name_by_label(text: str) -> str:
-    """Extracts voter's name after 'मतदाराचे पूर्ण' or 'मतदाराचे पूर्ण नांव'"""
     label_variants = [
         r'मतदाराचे\s*पूर्ण\s*नांव[:：]?',
         r'मतदाराचे\s*पूर्ण[:：]?',
@@ -69,11 +68,24 @@ def extract_name_fallback(text: str) -> str:
         return ""
     return max(chunks, key=lambda s: len(s.strip())).strip()
 
+# --- Extract father's name ---
+def extract_father_name(text: str) -> str:
+    """Extract 'वडिलांचे नाव' or variants."""
+    pattern = re.compile(r'(वडिलांचे\s*नाव|वडिलांचे|पतीचे\s*नाव|पतीचे)\s*[:：]?\s*([\u0900-\u097F\sA-Za-z]+)')
+    match = pattern.search(text)
+    if not match:
+        return ""
+    name = match.group(2).strip()
+    # stop at next known boundary (घर, वय, लिंग, etc.)
+    name = re.split(r'(घर|क्रमांक|Plot|वय|लिंग)', name)[0]
+    name = re.sub(r'[^-\u0900-\u097F\sA-Za-z]', '', name)
+    return name.strip()
+
 # --- Field extraction ---
 def extract_fields(raw_text: str):
     text = normalize_text(raw_text)
 
-    # क्रमांक: first number before voter id
+    # क्रमांक
     nums = list(re.finditer(r'\b\d{1,3}(?:,\d{3})*\b', text))
     vid_m = re.search(r'\b[A-Z0-9]{2,}\d{3,}\b', text)
     voter_id = normalize_voter_id(vid_m.group(0)) if vid_m else ""
@@ -89,21 +101,24 @@ def extract_fields(raw_text: str):
         else:
             seq = nums[0].group(0)
 
-    # भाग क्रमांक (e.g. 10/128/185)
+    # भाग क्रमांक
     part_m = re.search(r'\b\d+/\d+/\d+\b', text)
     part = part_m.group(0) if part_m else ""
 
-    # मतदाराचे पूर्ण (name)
+    # मतदाराचे पूर्ण
     name = extract_name_by_label(text)
     if not name:
-        # fallback if label not detected
         name = extract_name_fallback(text)
+
+    # वडिलांचे नाव
+    father_name = extract_father_name(text)
 
     return {
         "क्रमांक": seq,
         "मतदार ओळख क्रमांक": voter_id,
         "भाग क्रमांक": part,
-        "मतदाराचे पूर्ण": name
+        "मतदाराचे पूर्ण": name,
+        "वडिलांचे नाव": father_name
     }
 
 # --- Single Image Processing ---
