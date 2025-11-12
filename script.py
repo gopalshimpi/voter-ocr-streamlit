@@ -2,21 +2,21 @@ import easyocr
 import re
 import pandas as pd
 from pathlib import Path
-import glob
 import cv2
 import os
 import time
 import sys
 import warnings
+from datetime import datetime
 
-# Suppress unnecessary torch/easyocr warnings
+# Suppress EasyOCR warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 
 # === OCR Setup ===
 reader = easyocr.Reader(['mr', 'en'], gpu=False)
 
 MARATHI_MAP = str.maketrans('०१२३४५६७८९', '0123456789')
-BOUNDARY_LABELS = r'(?:नांव|वडिलांचे\s*नाव|वडिलांचे|घर\s*क्रमांक|Plot|वय|लिंग)'
+BOUNDARY_LABELS = r'(?:नांव|वडिलांचे\s*नाव|वडिलांचे|पतीचे\s*नाव|पतीचे|घर\s*क्रमांक|Plot|वय|लिंग)'
 
 # === Utility functions ===
 def normalize_text(s: str) -> str:
@@ -41,7 +41,7 @@ def ocr_text(img_path: str) -> str:
     res = reader.readtext(str(img_path))
     return " ".join([r[1] for r in res])
 
-# === Extraction logic unchanged ===
+# === Name extraction ===
 def extract_name_by_label(text: str) -> str:
     label_variants = [
         r'मतदाराचे\s*पूर्ण\s*नांव[:：]?',
@@ -72,17 +72,14 @@ def extract_name_fallback(text: str) -> str:
         return ""
     return max(chunks, key=lambda s: len(s.strip())).strip()
 
+# === Father or Husband name extraction ===
 def extract_father_name(text: str) -> str:
-    """
-    Extract either 'वडिलांचे नाव' or 'पतीचे नाव' variants from text.
-    Handles OCR variants like पत्तीचे, पतिचे, पति चे, etc.
-    """
-    # Normalize minor OCR variations
+    """Handles वडिलांचे नाव and पतीचे नाव variants like पत्तीचे, पतिचे, etc."""
+    # Normalize OCR variants
     text = re.sub(r'पत्तीचे', 'पतीचे', text)
     text = re.sub(r'पतिचे', 'पतीचे', text)
     text = re.sub(r'पति\s*चे', 'पतीचे', text)
 
-    # Try father’s name first
     father_pattern = re.compile(r'(वडिलांचे\s*नाव|वडिलांचे)\s*[:：]?\s*([\u0900-\u097F\sA-Za-z]+)')
     husband_pattern = re.compile(r'(पतीचे\s*नाव|पतीचे)\s*[:：]?\s*([\u0900-\u097F\sA-Za-z]+)')
 
@@ -90,7 +87,6 @@ def extract_father_name(text: str) -> str:
     husband_match = husband_pattern.search(text)
 
     relation_type = None
-
     if father_match:
         name = father_match.group(2).strip()
         relation_type = "वडील"
@@ -100,15 +96,12 @@ def extract_father_name(text: str) -> str:
     else:
         return ""
 
-    # Clean name
     name = re.split(r'(घर|क्रमांक|Plot|वय|लिंग|\*\*)', name)[0]
     name = re.sub(r'[^-\u0900-\u097F\sA-Za-z]', '', name)
-    name = name.strip()
-
-    # Optional: store relation type alongside name
     extract_father_name.relation_type = relation_type
-    return name
+    return name.strip()
 
+# === Field extraction ===
 def extract_fields(raw_text: str):
     text = normalize_text(raw_text)
     num_pattern = re.compile(r'\b\d{1,3}(?:[,\.\s]?\d{3})*\b')
@@ -127,20 +120,23 @@ def extract_fields(raw_text: str):
 
     part_m = re.search(r'\b\d+/\d+/\d+\b', text)
     part = part_m.group(0) if part_m else ""
+
     name = extract_name_by_label(text) or extract_name_fallback(text)
     father_name = extract_father_name(text)
+    relation_type = getattr(extract_father_name, "relation_type", "")
 
     return {
         "क्रमांक": seq,
         "मतदार ओळख क्रमांक": voter_id,
         "भाग क्रमांक": part,
         "मतदाराचे पूर्ण": name,
-        "वडिलांचे नाव / पतीचे नाव": father_name
+        "वडिलांचे/पतीचे नाव": father_name,
+        "नातं": relation_type
     }
 
-# === Dynamic photo extraction ===
-def extract_photo_dynamic(box_path: str, output_dir="photos"):
-    os.makedirs(output_dir, exist_ok=True)
+# === Photo extraction ===
+def extract_photo_dynamic(box_path: str, output_dir: Path):
+    output_dir.mkdir(parents=True, exist_ok=True)
     img = cv2.imread(str(box_path))
     if img is None:
         return ""
@@ -160,11 +156,11 @@ def extract_photo_dynamic(box_path: str, output_dir="photos"):
         photo = img[y1:y2, x1:x2]
 
     photo_name = Path(box_path).stem + "_photo.png"
-    photo_path = Path(output_dir) / photo_name
+    photo_path = output_dir / photo_name
     cv2.imwrite(str(photo_path), photo)
     return str(photo_path)
 
-# === Progress Bar ===
+# === Progress bar ===
 def print_progress(current, total, bar_length=30):
     percent = current / total
     filled = int(bar_length * percent)
@@ -172,26 +168,27 @@ def print_progress(current, total, bar_length=30):
     sys.stdout.write(f"\rProgress: {percent*100:5.1f}% [{bar}]")
     sys.stdout.flush()
 
-# === Image Processing ===
-def process_image(img_path: str):
+# === Process image ===
+def process_image(img_path: str, photo_out: Path):
     raw = ocr_text(img_path)
-    # print("🧠 OCR Text:\n", raw)
     fields = extract_fields(raw)
-    photo_path = extract_photo_dynamic(img_path)
-    fields["photo_path"] = photo_path
-    # print("\n✅ Extracted Voter Info:")
-    # for k, v in fields.items():
-    #     print(f"   {k}: {v}")
+    extract_photo_dynamic(img_path, photo_out)  # still save photo but not in CSV
     return fields
 
-# === Folder Processing ===
-def process_folder(folder: str, out_csv="voter_list.csv"):
+# === Process folder ===
+def process_folder(folder: str):
     folder = Path(folder)
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
+    result_dir = Path(f"result_{timestamp}")
+    photo_dir = result_dir / "photos"
+    csv_path = result_dir / "voter_list_output.csv"
+
     files = sorted(folder.rglob("*.png"))
     if not files:
         print(f"⚠️ No PNG images found in {folder}")
         return
 
+    result_dir.mkdir(exist_ok=True)
     total = len(files)
     print(f"\n📦 Found {total} voter box images in '{folder}'\n")
 
@@ -199,22 +196,21 @@ def process_folder(folder: str, out_csv="voter_list.csv"):
     start_time = time.time()
 
     for i, f in enumerate(files, start=1):
-        data = process_image(str(f))
-        data["source_file"] = f.name
+        data = process_image(str(f), photo_dir)
         all_data.append(data)
-
-        # update progress bar cleanly (no newlines)
         print_progress(i, total)
 
     elapsed = time.time() - start_time
-    print(f"\n\n💾 All done in {elapsed:.1f}s! Saving results...")
-    pd.DataFrame(all_data).to_csv(out_csv, index=False, encoding="utf-8-sig")
-    print(f"✅ Saved {len(all_data)} records to {out_csv}\n")
+    print(f"\n\n💾 Completed in {elapsed:.1f}s! Saving results...")
+
+    pd.DataFrame(all_data).to_csv(csv_path, index=False, encoding="utf-8-sig")
+    print(f"✅ Saved {len(all_data)} clean records to {csv_path}")
+    print(f"🖼  Photos saved in {photo_dir}\n")
 
 # === Main ===
 if __name__ == "__main__":
     input_folder = Path("voter_list_box")
     if input_folder.exists():
-        process_folder(input_folder, out_csv="voter_list_output.csv")
+        process_folder(input_folder)
     else:
         print("⚠️ Folder 'voter_list_box' not found. Please create it and put PNG images inside.")
