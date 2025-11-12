@@ -60,10 +60,12 @@ if uploaded_pdf:
 
             # Step 4 - Find Result
             results = sorted(
-                Path(".").glob("result_*/voter_list_output.csv"),
+                Path(".").glob("result_*/**/*.csv"),
                 key=lambda p: p.stat().st_mtime,
                 reverse=True,
             )
+
+            
             if results:
                 csv_path = results[0]
                 st.download_button(
