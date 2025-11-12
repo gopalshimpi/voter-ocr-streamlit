@@ -6,3 +6,4 @@ easyocr
 torch
 torchvision
 streamlit
+numpy==1.26.4
