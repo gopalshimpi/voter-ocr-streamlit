@@ -12,30 +12,33 @@ BOUNDARY_LABELS = r'(?:नांव|वडिलांचे\s*नाव|वड�
 
 # --- Utility functions ---
 def normalize_text(s: str) -> str:
+    """Normalize Marathi digits and whitespace."""
     s = s.translate(MARATHI_MAP)
     s = re.sub(r'\s+', ' ', s)
     return s.strip()
 
 def normalize_voter_id(voter_id: str) -> str:
-    """Fix common OCR mistakes in voter ID like 78C -> TBC"""
+    """Fix common OCR mistakes in voter ID like 78C -> TBC or KOT -> KDT"""
     if not voter_id:
         return ""
     v = voter_id.strip().upper()
     fixes = {
-        "7BC": "TBC", "78C": "TBC", "I3C": "TBC", "IBC": "TBC",
-        "KOT": "KDT", "K0T": "KDT", "K0D": "KDT", "K0T": "KDT",
-        "KOT": "KDT", "KDI": "KDT"
+        "7BC": "TBC", "78C": "TBC", "I3C": "TBC", "IBC": "TBC", "T8C": "TBC",
+        "KOT": "KDT", "K0T": "KDT", "K0D": "KDT", "KDI": "KDT", "KDC": "KDT",
+        "TBD": "TBC"
     }
     for wrong, right in fixes.items():
         v = v.replace(wrong, right)
     return v
 
 def ocr_text(img_path: str) -> str:
+    """Run OCR and return joined text."""
     res = reader.readtext(str(img_path))
     return " ".join([r[1] for r in res])
 
 # --- Extract name accurately ---
 def extract_name_by_label(text: str) -> str:
+    """Extract voter's name after 'मतदाराचे पूर्ण' or variants."""
     label_variants = [
         r'मतदाराचे\s*पूर्ण\s*नांव[:：]?',
         r'मतदाराचे\s*पूर्ण[:：]?',
@@ -48,11 +51,11 @@ def extract_name_by_label(text: str) -> str:
         return ""
     start = m.end()
     tail = text[start:]
-    # stop at next boundary like नांव / वडिलांचे नाव / वय etc
+    # Stop at next field like नांव / वडिलांचे / वय etc.
     boundary = re.search(r'(?:\s|^)(' + BOUNDARY_LABELS + r')(?:\s|$)', tail)
     end = boundary.start() if boundary else len(tail)
     name = tail[:end].strip()
-    # cleanup
+    # Cleanup
     name = re.sub(r'^[\s:：ः\-]+', '', name)
     name = re.sub(r'(नांव|वडिलांचे\s*नाव|घर\s*क्रमांक|वय|लिंग).*$', '', name)
     name = re.sub(r'[^-\u0900-\u097F\sA-Za-z]', '', name)
@@ -60,7 +63,7 @@ def extract_name_by_label(text: str) -> str:
     return name.strip()
 
 def extract_name_fallback(text: str) -> str:
-    """Fallback: find longest Devanagari chunk before next label"""
+    """Fallback: find longest Marathi chunk before boundary."""
     boundary = re.search(BOUNDARY_LABELS, text)
     left = text[:boundary.start()] if boundary else text
     chunks = re.findall(r'[\u0900-\u097F\s]{3,}', left)
@@ -68,38 +71,45 @@ def extract_name_fallback(text: str) -> str:
         return ""
     return max(chunks, key=lambda s: len(s.strip())).strip()
 
-# --- Extract father's name ---
+# --- Extract father's or husband's name ---
 def extract_father_name(text: str) -> str:
-    """Extract 'वडिलांचे नाव' or variants."""
+    """Extract 'वडिलांचे नाव' or 'पतीचे नाव' field."""
     pattern = re.compile(r'(वडिलांचे\s*नाव|वडिलांचे|पतीचे\s*नाव|पतीचे)\s*[:：]?\s*([\u0900-\u097F\sA-Za-z]+)')
     match = pattern.search(text)
     if not match:
         return ""
     name = match.group(2).strip()
-    # stop at next known boundary (घर, वय, लिंग, etc.)
+    # Stop at next boundary
     name = re.split(r'(घर|क्रमांक|Plot|वय|लिंग)', name)[0]
     name = re.sub(r'[^-\u0900-\u097F\sA-Za-z]', '', name)
     return name.strip()
 
-# --- Field extraction ---
+# --- Smart field extraction ---
 def extract_fields(raw_text: str):
     text = normalize_text(raw_text)
 
-    # क्रमांक
-    nums = list(re.finditer(r'\b\d{1,3}(?:,\d{3})*\b', text))
+    # क्रमांक: handles 1,403 / 1403 / 1.403 / 1 403
+    num_pattern = re.compile(r'\b\d{1,3}(?:[,\.\s]?\d{3})*\b')
+    nums = list(num_pattern.finditer(text))
+
+    # मतदार ओळख क्रमांक (TBC / KDT / etc.)
     vid_m = re.search(r'\b[A-Z0-9]{2,}\d{3,}\b', text)
     voter_id = normalize_voter_id(vid_m.group(0)) if vid_m else ""
 
+    # क्रमांक: first number before voter ID
     seq = ""
     if nums:
         if vid_m:
             nums_before = [m for m in nums if m.start() < vid_m.start()]
             if nums_before:
-                seq = nums_before[0].group(0)
+                seq = nums_before[-1].group(0)
             else:
                 seq = nums[0].group(0)
         else:
             seq = nums[0].group(0)
+
+    # Normalize (remove commas, dots, spaces)
+    seq = re.sub(r'[,\.\s]', '', seq).strip()
 
     # भाग क्रमांक
     part_m = re.search(r'\b\d+/\d+/\d+\b', text)
@@ -110,7 +120,7 @@ def extract_fields(raw_text: str):
     if not name:
         name = extract_name_fallback(text)
 
-    # वडिलांचे नाव
+    # वडिलांचे नाव / पतीचे नाव
     father_name = extract_father_name(text)
 
     return {
