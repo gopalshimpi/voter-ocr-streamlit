@@ -149,10 +149,6 @@ def print_progress(current, total, bar_length=30):
 
 # ------------------ Wait for Images ------------------
 def wait_for_images(folder: Path, expected_min=10, timeout=60):
-    """
-    Wait until enough images appear and are readable.
-    Keeps checking for up to 'timeout' seconds.
-    """
     print(f"\n🕒 Waiting for voter box images to be ready in '{folder}'...")
     start_time = time.time()
     while True:
@@ -178,10 +174,11 @@ def process_folder(folder: str):
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
     result_dir = Path(f"result_{timestamp}")
     photo_dir = result_dir / f"{result_dir.name}_photos"
-    csv_path = result_dir / "voter_list_output.csv"
 
-    files = wait_for_images(folder)  # 👈 wait until images are ready
+    # 💡 CSV name = same as folder name
+    csv_path = result_dir / f"{result_dir.name}.csv"
 
+    files = wait_for_images(folder)
     result_dir.mkdir(exist_ok=True)
     total = len(files)
 
@@ -191,6 +188,7 @@ def process_folder(folder: str):
         data = process_image(str(f), photo_dir)
         all_data.append(data)
         print_progress(i, total)
+
     elapsed = time.time() - start_time
     print(f"\n💾 Completed in {elapsed:.1f}s! Saving results...")
 
