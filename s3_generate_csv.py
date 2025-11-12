@@ -9,13 +9,16 @@ import sys
 import warnings
 from datetime import datetime
 
+# ------------------ Setup ------------------
 warnings.filterwarnings("ignore", category=UserWarning)
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+os.environ["KMP_WARNINGS"] = "FALSE"
 
 reader = easyocr.Reader(['mr', 'en'], gpu=False)
 MARATHI_MAP = str.maketrans('०१२३४५६७८९', '0123456789')
 BOUNDARY_LABELS = r'(?:नांव|वडिलांचे\s*नाव|वडिलांचे|पतीचे\s*नाव|पतीचे|घर\s*क्रमांक|Plot|वय|लिंग)'
 
-# ---------- Utility ----------
+# ------------------ Utility ------------------
 def normalize_text(s: str) -> str:
     return re.sub(r'\s+', ' ', s.translate(MARATHI_MAP)).strip()
 
@@ -36,7 +39,7 @@ def ocr_text(img_path: str) -> str:
     res = reader.readtext(str(img_path))
     return " ".join([r[1] for r in res])
 
-# ---------- Extraction ----------
+# ------------------ Extraction ------------------
 def extract_name_by_label(text: str) -> str:
     label_variants = [
         r'मतदाराचे\s*पूर्ण\s*नांव[:：]?',
@@ -112,11 +115,12 @@ def extract_fields(raw_text: str):
         "नातं": relation_type
     }
 
-# ---------- Photo Extraction ----------
+# ------------------ Photo Extraction ------------------
 def extract_photo_dynamic(box_path: str, output_dir: Path):
     output_dir.mkdir(parents=True, exist_ok=True)
     img = cv2.imread(str(box_path))
-    if img is None: return ""
+    if img is None:
+        return ""
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
     faces = face_cascade.detectMultiScale(gray, 1.1, 5, minSize=(40, 40))
@@ -133,15 +137,36 @@ def extract_photo_dynamic(box_path: str, output_dir: Path):
     cv2.imwrite(str(photo_path), photo)
     return str(photo_path)
 
-# ---------- Progress ----------
+# ------------------ Progress Bar ------------------
 def print_progress(current, total, bar_length=30):
     percent = current / total
     filled = int(bar_length * percent)
     bar = "█" * filled + "░" * (bar_length - filled)
     sys.stdout.write(f"\rProgress: {percent*100:5.1f}% [{bar}]")
     sys.stdout.flush()
+    if current == total:
+        sys.stdout.write("\n")
 
-# ---------- Processing ----------
+# ------------------ Wait for Images ------------------
+def wait_for_images(folder: Path, expected_min=10, timeout=60):
+    """
+    Wait until enough images appear and are readable.
+    Keeps checking for up to 'timeout' seconds.
+    """
+    print(f"\n🕒 Waiting for voter box images to be ready in '{folder}'...")
+    start_time = time.time()
+    while True:
+        images = sorted(folder.rglob("*.png"))
+        valid = [img for img in images if cv2.imread(str(img)) is not None]
+        if len(valid) >= expected_min:
+            print(f"✅ {len(valid)} images detected and ready.\n")
+            return valid
+        if time.time() - start_time > timeout:
+            print(f"\n❌ Timeout waiting for images after {timeout}s. Found only {len(valid)} valid images.")
+            sys.exit(1)
+        time.sleep(2)
+
+# ------------------ Main Processing ------------------
 def process_image(img_path: str, photo_out: Path):
     raw = ocr_text(img_path)
     fields = extract_fields(raw)
@@ -155,14 +180,10 @@ def process_folder(folder: str):
     photo_dir = result_dir / f"{result_dir.name}_photos"
     csv_path = result_dir / "voter_list_output.csv"
 
-    files = sorted(folder.rglob("*.png"))
-    if not files:
-        print(f"⚠️ No PNG images found in {folder}")
-        return
+    files = wait_for_images(folder)  # 👈 wait until images are ready
 
     result_dir.mkdir(exist_ok=True)
     total = len(files)
-    print(f"\n📦 Found {total} voter box images in '{folder}'\n")
 
     all_data = []
     start_time = time.time()
@@ -171,13 +192,13 @@ def process_folder(folder: str):
         all_data.append(data)
         print_progress(i, total)
     elapsed = time.time() - start_time
-    print(f"\n\n💾 Completed in {elapsed:.1f}s! Saving results...")
+    print(f"\n💾 Completed in {elapsed:.1f}s! Saving results...")
 
     pd.DataFrame(all_data).to_csv(csv_path, index=False, encoding="utf-8-sig")
     print(f"✅ Saved {len(all_data)} records to {csv_path}")
-    print(f"🖼 Photos saved in {photo_dir}\n")
+    print(f"🖼  Photos saved in {photo_dir}\n")
 
-# ---------- Main ----------
+# ------------------ Entry Point ------------------
 if __name__ == "__main__":
     input_folder = Path("voter_list_box")
     if input_folder.exists():
