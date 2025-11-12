@@ -73,14 +73,41 @@ def extract_name_fallback(text: str) -> str:
     return max(chunks, key=lambda s: len(s.strip())).strip()
 
 def extract_father_name(text: str) -> str:
-    pattern = re.compile(r'(वडिलांचे\s*नाव|वडिलांचे|पतीचे\s*नाव|पतीचे)\s*[:：]?\s*([\u0900-\u097F\sA-Za-z]+)')
-    match = pattern.search(text)
-    if not match:
+    """
+    Extract either 'वडिलांचे नाव' or 'पतीचे नाव' variants from text.
+    Handles OCR variants like पत्तीचे, पतिचे, पति चे, etc.
+    """
+    # Normalize minor OCR variations
+    text = re.sub(r'पत्तीचे', 'पतीचे', text)
+    text = re.sub(r'पतिचे', 'पतीचे', text)
+    text = re.sub(r'पति\s*चे', 'पतीचे', text)
+
+    # Try father’s name first
+    father_pattern = re.compile(r'(वडिलांचे\s*नाव|वडिलांचे)\s*[:：]?\s*([\u0900-\u097F\sA-Za-z]+)')
+    husband_pattern = re.compile(r'(पतीचे\s*नाव|पतीचे)\s*[:：]?\s*([\u0900-\u097F\sA-Za-z]+)')
+
+    father_match = father_pattern.search(text)
+    husband_match = husband_pattern.search(text)
+
+    relation_type = None
+
+    if father_match:
+        name = father_match.group(2).strip()
+        relation_type = "वडील"
+    elif husband_match:
+        name = husband_match.group(2).strip()
+        relation_type = "पती"
+    else:
         return ""
-    name = match.group(2).strip()
-    name = re.split(r'(घर|क्रमांक|Plot|वय|लिंग)', name)[0]
+
+    # Clean name
+    name = re.split(r'(घर|क्रमांक|Plot|वय|लिंग|\*\*)', name)[0]
     name = re.sub(r'[^-\u0900-\u097F\sA-Za-z]', '', name)
-    return name.strip()
+    name = name.strip()
+
+    # Optional: store relation type alongside name
+    extract_father_name.relation_type = relation_type
+    return name
 
 def extract_fields(raw_text: str):
     text = normalize_text(raw_text)
@@ -108,7 +135,7 @@ def extract_fields(raw_text: str):
         "मतदार ओळख क्रमांक": voter_id,
         "भाग क्रमांक": part,
         "मतदाराचे पूर्ण": name,
-        "वडिलांचे नाव": father_name
+        "वडिलांचे नाव / पतीचे नाव": father_name
     }
 
 # === Dynamic photo extraction ===
@@ -148,9 +175,13 @@ def print_progress(current, total, bar_length=30):
 # === Image Processing ===
 def process_image(img_path: str):
     raw = ocr_text(img_path)
+    # print("🧠 OCR Text:\n", raw)
     fields = extract_fields(raw)
     photo_path = extract_photo_dynamic(img_path)
     fields["photo_path"] = photo_path
+    # print("\n✅ Extracted Voter Info:")
+    # for k, v in fields.items():
+    #     print(f"   {k}: {v}")
     return fields
 
 # === Folder Processing ===
