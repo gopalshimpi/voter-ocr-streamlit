@@ -1,6 +1,8 @@
-streamlit
-pandas
-opencv-python-headless
-easyocr
 PyMuPDF
+opencv-python
 numpy
+pandas
+easyocr
+torch
+torchvision
+streamlit
