@@ -8,7 +8,7 @@ if not matches:
 src = matches[0]
 print(f"✅ Found image at: {src}")
 
-out_dir = Path("voter_boxes_fixed")  # output folder
+out_dir = Path("voter_list_box")  # output folder
 out_dir.mkdir(exist_ok=True)
 
 img = cv2.imread(str(src))

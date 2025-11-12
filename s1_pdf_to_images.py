@@ -3,8 +3,8 @@ import cv2
 import numpy as np
 from pathlib import Path
 
-PDF_FILE = "FinalList_Ward_15-pages-9-1.pdf"
-OUT_DIR = Path("voter_boxes")
+PDF_FILE = "FinalList_Ward_15-pages-9-2.pdf"
+OUT_DIR = Path("voter_pages")
 OUT_DIR.mkdir(exist_ok=True)
 
 # Convert PDF page to image
