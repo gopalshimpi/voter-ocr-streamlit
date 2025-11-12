@@ -6,6 +6,11 @@ import glob
 import cv2
 import os
 import time
+import sys
+import warnings
+
+# Suppress unnecessary torch/easyocr warnings
+warnings.filterwarnings("ignore", category=UserWarning)
 
 # === OCR Setup ===
 reader = easyocr.Reader(['mr', 'en'], gpu=False)
@@ -36,6 +41,7 @@ def ocr_text(img_path: str) -> str:
     res = reader.readtext(str(img_path))
     return " ".join([r[1] for r in res])
 
+# === Extraction logic unchanged ===
 def extract_name_by_label(text: str) -> str:
     label_variants = [
         r'मतदाराचे\s*पूर्ण\s*नांव[:：]?',
@@ -76,7 +82,6 @@ def extract_father_name(text: str) -> str:
     name = re.sub(r'[^-\u0900-\u097F\sA-Za-z]', '', name)
     return name.strip()
 
-# === Smart field extraction ===
 def extract_fields(raw_text: str):
     text = normalize_text(raw_text)
     num_pattern = re.compile(r'\b\d{1,3}(?:[,\.\s]?\d{3})*\b')
@@ -132,44 +137,50 @@ def extract_photo_dynamic(box_path: str, output_dir="photos"):
     cv2.imwrite(str(photo_path), photo)
     return str(photo_path)
 
+# === Progress Bar ===
+def print_progress(current, total, bar_length=30):
+    percent = current / total
+    filled = int(bar_length * percent)
+    bar = "█" * filled + "░" * (bar_length - filled)
+    sys.stdout.write(f"\rProgress: {percent*100:5.1f}% [{bar}]")
+    sys.stdout.flush()
+
 # === Image Processing ===
 def process_image(img_path: str):
-    print(f"\n🖼 Processing: {img_path}")
     raw = ocr_text(img_path)
-    print("🧠 OCR Text:\n", raw)
     fields = extract_fields(raw)
     photo_path = extract_photo_dynamic(img_path)
     fields["photo_path"] = photo_path
-    print("\n✅ Extracted Voter Info:")
-    for k, v in fields.items():
-        print(f"   {k}: {v}")
     return fields
 
 # === Folder Processing ===
 def process_folder(folder: str, out_csv="voter_list.csv"):
     folder = Path(folder)
-    files = sorted(folder.rglob("*.png"))  # recursive: handles all pages
+    files = sorted(folder.rglob("*.png"))
     if not files:
         print(f"⚠️ No PNG images found in {folder}")
         return
 
-    all_data = []
     total = len(files)
     print(f"\n📦 Found {total} voter box images in '{folder}'\n")
 
+    all_data = []
+    start_time = time.time()
+
     for i, f in enumerate(files, start=1):
-        print(f"🧩 [{i}/{total}] Processing {f.name}")
         data = process_image(str(f))
         data["source_file"] = f.name
         all_data.append(data)
-        print("--------------------------------------------------")
-        time.sleep(0.3)  # small pause for readability
 
-    df = pd.DataFrame(all_data)
-    df.to_csv(out_csv, index=False, encoding="utf-8-sig")
-    print(f"\n💾 All done! Saved {len(all_data)} records to {out_csv}")
+        # update progress bar cleanly (no newlines)
+        print_progress(i, total)
 
-# === Main Entry ===
+    elapsed = time.time() - start_time
+    print(f"\n\n💾 All done in {elapsed:.1f}s! Saving results...")
+    pd.DataFrame(all_data).to_csv(out_csv, index=False, encoding="utf-8-sig")
+    print(f"✅ Saved {len(all_data)} records to {out_csv}\n")
+
+# === Main ===
 if __name__ == "__main__":
     input_folder = Path("voter_list_box")
     if input_folder.exists():
